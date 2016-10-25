@@ -1,4 +1,4 @@
-package main
+package csp
 
 import (
 	"encoding/json"
@@ -12,10 +12,11 @@ func expand(n *CSPSearchNode, p *BinaryCSP) (children []*CSPSearchNode) {
 	return children
 }
 
-func searchWithFringe(f *StackFringe, p *BinaryCSP) string {
+func searchWithFringe(f Fringe, p *BinaryCSP) string {
 	startState := p.getStartState()
 	closedSet := make(map[*CSPSearchNode]bool)
 	f.push(startState)
+	expanded := 0
 
 	for {
 		if f.isEmpty() {
@@ -24,7 +25,7 @@ func searchWithFringe(f *StackFringe, p *BinaryCSP) string {
 
 		nextNode := f.pop()
 		if p.isGoalState(nextNode) {
-			return nextNode.String()
+			return fmt.Sprintf("Expanded %d nodes and found: %s", expanded, nextNode.String())
 		}
 
 		if _, ok := closedSet[nextNode]; !ok {
@@ -33,9 +34,16 @@ func searchWithFringe(f *StackFringe, p *BinaryCSP) string {
 			for _, child := range expand(nextNode, p) {
 				f.push(child)
 			}
+			expanded++
 		}
 
 	}
+}
+
+type Fringe interface {
+	push(n *CSPSearchNode)
+	pop() *CSPSearchNode
+	isEmpty() bool
 }
 
 type StackFringe []*CSPSearchNode
@@ -54,6 +62,23 @@ func (f *StackFringe) isEmpty() bool {
 	return len(*f) == 0
 }
 
+type MostFreeFringe struct {
+	nodes   []*CSPSearchNode
+	problem *BinaryCSP
+}
+
+func (f *MostFreeFringe) push(n *CSPSearchNode) {
+	f.nodes = append(f.nodes, n)
+}
+
+func (f *MostFreeFringe) pop() (n *CSPSearchNode) {
+	return n
+}
+
+func (f *MostFreeFringe) isEmpty() bool {
+	return len(f.nodes) == 0
+}
+
 type CSPVar string
 type CSPVal string
 type CSPPair struct {
@@ -65,20 +90,30 @@ type BinaryCSP struct {
 	domain      []CSPVal
 	assignments map[CSPVar]CSPVal
 	constraints map[CSPPair]func(CSPVal, CSPVal) bool
+	options     map[string]bool
 }
 
 type CSPSearchNode struct {
-	assignments map[CSPVar]CSPVal
+	assignments    map[CSPVar]CSPVal
+	forwardDomains map[CSPVar][]CSPVal
 }
 
 func (n *CSPSearchNode) copy() (c *CSPSearchNode) {
 	c = &CSPSearchNode{
-		assignments: make(map[CSPVar]CSPVal),
+		assignments:    make(map[CSPVar]CSPVal),
+		forwardDomains: make(map[CSPVar][]CSPVal),
 	}
 	for k, v := range n.assignments {
-		c.assignments[k] = v
+		c.assign(k, v)
+	}
+	for k, v := range n.forwardDomains {
+		c.forwardDomains[k] = v
 	}
 	return c
+}
+
+func (n *CSPSearchNode) assign(v CSPVar, val CSPVal) {
+	n.assignments[v] = val
 }
 
 func (p *BinaryCSP) getStartState() *CSPSearchNode {
@@ -105,16 +140,34 @@ func (p *BinaryCSP) isGoalState(s *CSPSearchNode) bool {
 	return true
 }
 
+func (p *BinaryCSP) isLegal(s *CSPSearchNode) bool {
+	for pair, f := range p.constraints {
+		if s.assignments[pair.a] != "" && s.assignments[pair.b] != "" &&
+			!f(s.assignments[pair.a], s.assignments[pair.b]) {
+			return false
+		}
+	}
+	return true
+}
+
 func (p *BinaryCSP) getSuccessors(n *CSPSearchNode) (successors []*CSPSearchNode) {
 	for v, a := range n.assignments {
 		if a == "" {
 			for _, possibleValue := range p.domain {
 				s := n.copy()
-				s.assignments[v] = possibleValue
-				successors = append(successors, s)
+				s.assign(v, possibleValue)
+				// FAIL ON VIOLATION
+				if (p.options["checkViolation"] && p.isLegal(s)) || !p.options["checkViolation"] {
+					successors = append(successors, s)
+				}
+			}
+			// ORDERING
+			if p.options["ordering"] {
+				break
 			}
 		}
 	}
+
 	return successors
 }
 
@@ -137,45 +190,4 @@ func (n *CSPSearchNode) makePath() []*CSPSearchNode {
 func (n *CSPSearchNode) String() string {
 	json, _ := json.Marshal(n.assignments)
 	return string(json)
-}
-
-func main() {
-
-	var neq = func(a CSPVal, b CSPVal) bool {
-		return a != b
-	}
-
-	sampleProblem := &BinaryCSP{
-		vars:   []CSPVar{"A", "B", "C", "D"},
-		domain: []CSPVal{"Red", "Blue", "Green", "Yellow"},
-		constraints: map[CSPPair]func(CSPVal, CSPVal) bool{
-			CSPPair{
-				a: "A",
-				b: "B",
-			}: neq,
-			CSPPair{
-				a: "B",
-				b: "C",
-			}: neq,
-			CSPPair{
-				a: "C",
-				b: "D",
-			}: neq,
-			CSPPair{
-				a: "D",
-				b: "A",
-			}: neq,
-			CSPPair{
-				a: "D",
-				b: "B",
-			}: neq,
-			CSPPair{
-				a: "A",
-				b: "C",
-			}: neq,
-		},
-	}
-
-	fringe := &StackFringe{}
-	fmt.Println(searchWithFringe(fringe, sampleProblem))
 }
